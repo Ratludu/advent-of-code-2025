@@ -1,60 +1,10 @@
 const std = @import("std");
 const advent_of_code_2025 = @import("advent_of_code_2025");
+const day_1 = @import("day1.zig");
 
-const Dial = struct {
-    rotation: u8,
-    degrees: u32,
-
-    pub fn init(r: u8, d: u32) *Dial {
-        return &Dial{
-            .rotation = r,
-            .degrees = d,
-        };
-    }
-};
-
-const Counter = struct {
-    start: i32,
-    counter: u32,
-    floorCounter: u32,
-    state: i32,
-
-    pub fn init(s: i32, c: u32) Counter {
-        return Counter{
-            .start = s,
-            .counter = c,
-            .state = 0,
-            .floorCounter = 0,
-        };
-    }
-
-    pub fn rotate(self: *Counter, degrees: i32) void {
-        self.start += degrees;
-        if (@mod(self.start, 100) == 0) {
-            self.counter += 1;
-        }
-    }
-
-    pub fn rotateCounts(self: *Counter, degrees: i32) void {
-        var i: i32 = 0;
-        while (i < degrees) : (i += 1) {
-            if (degrees > 0) {
-                self.start -= 1;
-            } else {
-                self.start += 1;
-            }
-
-            self.start = @mod(self.start, 100);
-            if (self.start == 0) {
-                self.floorCounter += 1;
-            }
-        }
-
-        std.debug.print("{d}\n", .{self.start});
-        if (self.start == 0) {
-            self.counter += 1;
-        }
-    }
+const IDs = struct {
+    from: []const u8,
+    to: []const u8,
 };
 
 pub fn main() !void {
@@ -82,11 +32,11 @@ pub fn main() !void {
     if (std.mem.eql(u8, command, "day_1")) {
 
         // get dials from file
-        const dials = try parseDials(allocator, &cwd);
+        const dials = try day_1.parseDials(allocator, &cwd);
         defer allocator.free(dials);
 
         if (std.mem.eql(u8, args[2], "-1")) {
-            var my_counter = Counter.init(50, 0);
+            var my_counter = day_1.Counter.init(50, 0);
             for (dials) |d| {
                 const signed_d: i32 = @intCast(d.degrees);
                 if (d.rotation == 'L') {
@@ -101,73 +51,119 @@ pub fn main() !void {
         }
 
         if (std.mem.eql(u8, args[2], "-2")) {
-            var floor_count: i32 = 0;
-            var count: i32 = 0;
-            var state: i32 = 50;
+            var my_counter = day_1.Counter.init(50, 0);
             for (dials) |d| {
                 const signed_d: i32 = @intCast(d.degrees);
-                var i: i32 = 0;
-                while (i < signed_d) : (i += 1) {
-                    if (d.rotation == 'L') {
-                        state = @mod(state - 1, 100);
-                    } else {
-                        state = @mod(state + 1, 100);
-                    }
+                my_counter.rotateCounts(signed_d, d.rotation);
+            }
 
-                    if (state == 0) {
-                        floor_count += 1;
+            std.debug.print("Password: {d}\n", .{my_counter.floorCounter});
+            return;
+        }
+    }
+
+    if (std.mem.eql(u8, command, "day_2")) {
+        const file = try cwd.openFile("./data/day_2.csv", .{ .mode = .read_only });
+        defer file.close();
+
+        const stat = try file.stat();
+
+        var writer_buffer: [1024 * 4]u8 = undefined;
+        var std_writer = std.fs.File.stdout().writer(&writer_buffer);
+        var stdout = &std_writer.interface;
+
+        var reader_buffer: [1024 * 4]u8 = undefined;
+        var reader = file.readerStreaming(&reader_buffer);
+        var file_read = &reader.interface;
+
+        const out = try file_read.readAlloc(allocator, stat.size);
+        defer allocator.free(out);
+
+        var my_ids = try std.ArrayList(IDs).initCapacity(allocator, stat.size);
+        defer my_ids.deinit(allocator);
+
+        var iter = std.mem.splitAny(u8, out, ",");
+        while (iter.next()) |o| {
+            const index_delim = std.mem.indexOf(u8, o, "-") orelse 0;
+            if (index_delim != 0) {
+                try my_ids.append(allocator, .{ .from = o[0..index_delim], .to = o[index_delim + 1 ..] });
+            }
+        }
+        if (std.mem.eql(u8, args[2], "-1")) {
+            var sum: u64 = 0;
+            var time = try std.time.Timer.start();
+            for (my_ids.items) |id| {
+                var start = try std.fmt.parseUnsigned(u64, id.from, 10);
+                const end = try std.fmt.parseUnsigned(u64, id.to, 10);
+
+                while (start <= end) : (start += 1) {
+                    var my_buff: [1024 * 4]u8 = undefined;
+                    var start_string = try std.fmt.bufPrint(&my_buff, "{d}", .{start});
+
+                    if (@mod(start_string.len, 2) == 0) {
+                        const half = @divExact(start_string.len, 2);
+                        if (std.mem.eql(u8, start_string[0..half], start_string[half..])) {
+                            sum += @intCast(start);
+                        }
                     }
-                }
-                if (state == 0) {
-                    count += 1;
                 }
             }
 
-            std.debug.print("Password: {d}\n", .{floor_count});
+            const stop_time = time.read();
+            try stdout.print("time: {d}ms\n", .{stop_time / std.time.ns_per_ms});
+            try stdout.print("Password: {d}\n", .{sum});
+
+            try stdout.flush();
+            return;
+        }
+
+        if (std.mem.eql(u8, args[2], "-2")) {
+            var sum: u64 = 0;
+            var time = try std.time.Timer.start();
+
+            var cap_buff: [1024 * 4]u64 = undefined;
+            var my_set = std.ArrayList(u64).initBuffer(&cap_buff);
+
+            for (my_ids.items) |id| {
+                var start = try std.fmt.parseUnsigned(u64, id.from, 10);
+                const end = try std.fmt.parseUnsigned(u64, id.to, 10);
+
+                while (start <= end) : (start += 1) {
+                    var my_buff: [1024 * 4]u8 = undefined;
+                    var start_string = try std.fmt.bufPrint(&my_buff, "{d}", .{start});
+                    const half = start_string.len / 2;
+
+                    var limit: u32 = 0;
+                    while (limit < half) : (limit += 1) {
+                        if (@mod(start_string.len, limit + 1) == 0) {
+                            var w_iterator = std.mem.window(u8, start_string, limit + 1, limit + 1);
+                            _ = w_iterator.next();
+                            var match = true;
+                            while (w_iterator.next()) |w| {
+                                if (!std.mem.eql(u8, start_string[0 .. limit + 1], w)) {
+                                    match = false;
+                                }
+                            }
+
+                            if (match) {
+                                if (std.mem.indexOfScalar(u64, my_set.items, start) == null) {
+                                    sum += start;
+                                    my_set.appendAssumeCapacity(start);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            const stop_time = time.read();
+            try stdout.print("time: {d}ms\n", .{stop_time / std.time.ns_per_ms});
+            try stdout.print("Password: {d}\n", .{sum});
+
+            try stdout.flush();
             return;
         }
     }
 
     std.debug.print("command:{s} not recognised\n", .{command});
-}
-
-pub fn parseDials(allocator: std.mem.Allocator, cwd: *const std.fs.Dir) ![]Dial {
-    const buffer = try readFileConents(allocator, cwd);
-    defer allocator.free(buffer);
-
-    var my_slice = try std.ArrayList([]const u8).initCapacity(allocator, buffer.len);
-    defer my_slice.deinit(allocator);
-
-    var iter = std.mem.splitAny(u8, buffer, "\n");
-    while (iter.next()) |i| {
-        my_slice.appendAssumeCapacity(i);
-    }
-
-    const result = try my_slice.toOwnedSlice(allocator);
-    defer allocator.free(result);
-
-    var dials = try std.ArrayList(Dial).initCapacity(allocator, result.len);
-    for (result) |d| {
-        if (d.len == 0) {
-            continue;
-        }
-        const rotation = d[0];
-        const degrees = d[1..];
-        const deg = try std.fmt.parseInt(u32, degrees, 10);
-        try dials.append(allocator, .{ .rotation = rotation, .degrees = deg });
-    }
-
-    return dials.toOwnedSlice(allocator);
-}
-
-/// needs to be freed defer allocator.free(buffer)
-pub fn readFileConents(allocator: std.mem.Allocator, cwd: *const std.fs.Dir) ![]u8 {
-    const data = try cwd.openFile("./data/day_1.txt", .{ .mode = .read_only });
-    defer data.close();
-
-    const stat = try data.stat();
-
-    const buffer = try data.readToEndAlloc(allocator, stat.size);
-
-    return buffer;
 }
